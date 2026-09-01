@@ -73,31 +73,289 @@ function PageHeader({ eyebrow, title, description, actions }) {
 function Status({ value }) { const v = String(value || "unknown").toLowerCase(); const tone = ["approved", "completed", "live", "reconciled", "passed", "settled", "active", "filled"].includes(v) ? "success" : ["rejected", "failed", "blocked", "expired", "cancelled"].includes(v) ? "danger" : ["pending", "submitted", "under_review", "initiated", "partially_filled", "draft"].includes(v) ? "warning" : "neutral"; return <Badge tone={tone}>{titleCase(v)}</Badge>; }
 
 function App() {
-  const user = getUser();
-  return <BrowserRouter><Routes><Route path="/login" element={<Login />} /><Route path="/register" element={<Register />} /><Route path="*" element={<ProtectedShell user={user} />} /></Routes></BrowserRouter>;
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="*" element={<ProtectedShell />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
 
 function ProtectedShell({ user }) {
   const location = useLocation();
   const navigate = useNavigate();
+
   const [open, setOpen] = useState(false);
   const [me, setMe] = useState(user);
-  useEffect(() => { if (!localStorage.getItem("token") || !user) navigate("/login", { replace: true }); }, [navigate, user]);
-  useEffect(() => { if (localStorage.getItem("token")) api("/me").then(d => { setMe(d); localStorage.setItem("user", JSON.stringify(d)); }).catch(() => { localStorage.clear(); navigate("/login", { replace: true }); }); }, []);
-  if (!localStorage.getItem("token") || !me) return null;
-  const nav = NAV[me.role] || NAV.investor;
-  const allowed = nav.some(([path]) => path === location.pathname) || location.pathname === "/";
-  const logout = async () => { try { await api("/auth/logout", { method: "POST" }); } catch {} localStorage.clear(); navigate("/login", { replace: true }); };
-  if (!allowed) return <Navigate to="/" replace />;
-  return <div className="shell">
-    <aside className={`sidebar ${open ? "open" : ""}`}>
-      <div className="brand"><div className="brand-mark">TL</div><div><b>Token<span>Layer</span></b><small>RWA infrastructure</small></div></div>
-      <div className="role-chip"><span className={`role-dot ${ROLE_META[me.role]?.tone || "blue"}`}>{ROLE_META[me.role]?.icon || "•"}</span><div><small>Signed in as</small><strong>{ROLE_META[me.role]?.label || titleCase(me.role)}</strong></div></div>
-      <nav>{nav.map(([path, label, icon]) => <Link key={path} to={path} onClick={() => setOpen(false)} className={location.pathname === path ? "active" : ""}><span>{icon}</span>{label}</Link>)}</nav>
-      <div className="sidebar-bottom"><div className="security-note"><span>●</span><div><b>Secure session</b><small>RBAC protected</small></div></div><button className="logout" onClick={logout}>↪ <span>Sign out</span></button></div>
-    </aside>
-    <main className="content"><header className="topbar"><button className="mobile-menu" onClick={() => setOpen(v => !v)}>☰</button><div className="crumb"><span>TokenLayer</span><i>/</i><b>{pageTitle(location.pathname)}</b></div><div className="top-user"><div className="avatar">{(me.name || "U").slice(0, 1).toUpperCase()}</div><div><b>{me.name}</b><small>{ROLE_META[me.role]?.label}</small></div></div></header><div className="page">{location.pathname === "/" ? <Dashboard user={me} /> : <Routes><Route path="/organizations" element={<Organizations />} /><Route path="/users" element={<Users />} /><Route path="/roles" element={<Roles />} /><Route path="/assets" element={<Assets user={me} />} /><Route path="/tokenization" element={<Tokenization user={me} />} /><Route path="/compliance" element={<Compliance user={me} />} /><Route path="/compliance-status" element={<ComplianceStatus />} /><Route path="/marketplace" element={<Marketplace />} /><Route path="/portfolio" element={<Portfolio />} /><Route path="/onboarding" element={<InvestorOnboarding />} /><Route path="/wallet" element={<Wallet />} /><Route path="/settlement" element={<Settlement user={me} />} /><Route path="/trading" element={<Trading user={me} />} /><Route path="/audit" element={<Audit />} /></Routes>}</div><footer>TokenLayer • Functional interview MVP • Phases 1–4 • External regulated integrations represented by replaceable adapters</footer></main>
-  </div>;
+  const [loadingUser, setLoadingUser] = useState(true);
+  const [authError, setAuthError] = useState("");
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      navigate("/login", { replace: true });
+      return;
+    }
+
+    setLoadingUser(true);
+    setAuthError("");
+
+    api("/me")
+      .then((data) => {
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+          throw new Error("Invalid user information returned by server");
+        }
+
+        setMe(data);
+        localStorage.setItem("user", JSON.stringify(data));
+      })
+      .catch((error) => {
+        console.error("Failed to load authenticated user:", error);
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        setAuthError(error.message || "Authentication failed");
+        navigate("/login", { replace: true });
+      })
+      .finally(() => {
+        setLoadingUser(false);
+      });
+  }, [navigate]);
+
+  if (loadingUser) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f5f7fb",
+          color: "#172033",
+          fontSize: "18px",
+          fontWeight: 600,
+        }}
+      >
+        Loading TokenLayer...
+      </div>
+    );
+  }
+
+  if (authError || !me) {
+    return null;
+  }
+
+  const role = typeof me.role === "string" ? me.role : "investor";
+  const nav = Array.isArray(NAV[role]) ? NAV[role] : NAV.investor;
+
+  const allowed =
+    location.pathname === "/" ||
+    nav.some(
+      (item) =>
+        Array.isArray(item) &&
+        item.length > 0 &&
+        item[0] === location.pathname
+    );
+
+  const logout = async () => {
+    try {
+      await api("/auth/logout", { method: "POST" });
+    } catch (error) {
+      console.warn("Logout API failed:", error);
+    }
+
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+
+    navigate("/login", { replace: true });
+  };
+
+  if (!allowed) {
+    return <Navigate to="/" replace />;
+  }
+
+  return (
+    <div className="shell">
+      <aside className={`sidebar ${open ? "open" : ""}`}>
+        <div className="brand">
+          <div className="brand-mark">TL</div>
+
+          <div>
+            <b>
+              Token<span>Layer</span>
+            </b>
+            <small>RWA infrastructure</small>
+          </div>
+        </div>
+
+        <div className="role-chip">
+          <span
+            className={`role-dot ${
+              ROLE_META[role]?.tone || "blue"
+            }`}
+          >
+            {ROLE_META[role]?.icon || "•"}
+          </span>
+
+          <div>
+            <small>Signed in as</small>
+            <strong>
+              {ROLE_META[role]?.label || titleCase(role)}
+            </strong>
+          </div>
+        </div>
+
+        <nav>
+          {nav
+            .filter((item) => Array.isArray(item) && item.length >= 2)
+            .map(([path, label, icon]) => (
+              <Link
+                key={path}
+                to={path}
+                onClick={() => setOpen(false)}
+                className={
+                  location.pathname === path ? "active" : ""
+                }
+              >
+                <span>{icon}</span>
+                {label}
+              </Link>
+            ))}
+        </nav>
+
+        <div className="sidebar-bottom">
+          <div className="security-note">
+            <span>●</span>
+
+            <div>
+              <b>Secure session</b>
+              <small>RBAC protected</small>
+            </div>
+          </div>
+
+          <button className="logout" onClick={logout}>
+            ↪ <span>Sign out</span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="content">
+        <header className="topbar">
+          <button
+            className="mobile-menu"
+            onClick={() => setOpen((value) => !value)}
+          >
+            ☰
+          </button>
+
+          <div className="crumb">
+            <span>TokenLayer</span>
+            <i>/</i>
+            <b>{pageTitle(location.pathname)}</b>
+          </div>
+
+          <div className="top-user">
+            <div className="avatar">
+              {(me.name || "U").slice(0, 1).toUpperCase()}
+            </div>
+
+            <div>
+              <b>{me.name || "User"}</b>
+              <small>
+                {ROLE_META[role]?.label || titleCase(role)}
+              </small>
+            </div>
+          </div>
+        </header>
+
+        <div className="page">
+          {location.pathname === "/" ? (
+            <Dashboard user={me} />
+          ) : (
+            <Routes>
+              <Route
+                path="/organizations"
+                element={<Organizations />}
+              />
+
+              <Route
+                path="/users"
+                element={<Users />}
+              />
+
+              <Route
+                path="/roles"
+                element={<Roles />}
+              />
+
+              <Route
+                path="/assets"
+                element={<Assets user={me} />}
+              />
+
+              <Route
+                path="/tokenization"
+                element={<Tokenization user={me} />}
+              />
+
+              <Route
+                path="/compliance"
+                element={<Compliance user={me} />}
+              />
+
+              <Route
+                path="/compliance-status"
+                element={<ComplianceStatus />}
+              />
+
+              <Route
+                path="/marketplace"
+                element={<Marketplace />}
+              />
+
+              <Route
+                path="/portfolio"
+                element={<Portfolio />}
+              />
+
+              <Route
+                path="/onboarding"
+                element={<InvestorOnboarding />}
+              />
+
+              <Route
+                path="/wallet"
+                element={<Wallet />}
+              />
+
+              <Route
+                path="/settlement"
+                element={<Settlement user={me} />}
+              />
+
+              <Route
+                path="/trading"
+                element={<Trading user={me} />}
+              />
+
+              <Route
+                path="/audit"
+                element={<Audit />}
+              />
+            </Routes>
+          )}
+        </div>
+
+        <footer>
+          TokenLayer • Functional interview MVP • Phases 1–4 •
+          External regulated integrations represented by replaceable adapters
+        </footer>
+      </main>
+    </div>
+  );
 }
 function pageTitle(path) { const map = Object.fromEntries(Object.values(NAV).flat().map(([p, l]) => [p, l])); return map[path] || "Overview"; }
 
@@ -113,7 +371,7 @@ function Login() {
   const [demoOtp, setDemoOtp] = useState("");
   const [forgot, setForgot] = useState(false);
   const [forgotResult, setForgotResult] = useState("");
-  const presets = { admin: ["admin@tokenlayer.local", "Admin@123"], platform_admin: ["admin@tokenlayer.local", "Admin@123"], compliance: ["compliance@tokenlayer.local", "Compliance@123"], issuer: ["issuer@tokenlayer.local", "Issuer@123"], investor: ["investor@tokenlayer.local", "Investor@123"], custodian: ["custodian@tokenlayer.local", "Custodian@123"], auditor: ["auditor@tokenlayer.local", "Auditor@123"] };
+  const presets = { admin: ["admin@tokenlayer.local", "Admin@123"], platform_admin: ["platformadmin@tokenlayer.local", "Platform@123"], compliance: ["compliance@tokenlayer.local", "Compliance@123"], issuer: ["issuer@tokenlayer.local", "Issuer@123"], investor: ["investor@tokenlayer.local", "Investor@123"], custodian: ["custodian@tokenlayer.local", "Custodian@123"], auditor: ["auditor@tokenlayer.local", "Auditor@123"] };
   const chooseRole = value => { setRole(value); const p = presets[value] || presets.investor; setEmail(p[0]); setPassword(p[1]); setError(""); };
   const submit = async e => { e.preventDefault(); setBusy(true); setError(""); try { const data = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password, role, otp: otp || null, device }) }); localStorage.setItem("token", data.access_token); localStorage.setItem("user", JSON.stringify(data.user)); navigate("/", { replace: true }); } catch (x) { setError(x.message); } finally { setBusy(false); } };
   const requestOtp = async () => { try { const d = await api(`/auth/request-otp?email=${encodeURIComponent(email)}`); setDemoOtp(d.otp); setError("Demo OTP generated. Enter it below."); } catch (x) { setError(x.message); } };
